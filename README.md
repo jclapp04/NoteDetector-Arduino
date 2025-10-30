@@ -15,20 +15,31 @@ The purpose of this project is to identify the musical notes played by musical i
   - GitHub account 
 
 Single-Digit 7-Segment Display Setup (Single-Resistor Version)
+
 Components
+
 1 × Arduino Mega 2560 (or Uno)
+
 1 × Single-digit 7-segment display (common cathode)
+
 1 × 220 Ω – 1 kΩ resistor
+
 Breadboard and jumper wires
+
 Wiring Instructions
+
 Place the 7-segment display in the center of the breadboard so that each side of pins sits on a separate row.
 Identify the display pins. A typical layout (from top left down one side and up the other) is:
+
 a, f, GND, b,
 DP, c, GND, d, e, g
-(Refer to your display’s datasheet if the order differs.)
+
 Connect one of the common-cathode pins to Arduino GND through a single resistor (220 Ω – 1 kΩ).
+
 Connect the other common-cathode pin directly to GND.
+
 Connect each segment pin directly to the Arduino pins shown below:
+
 Segment	Arduino Pin
 a	D2
 b	D3
@@ -38,12 +49,19 @@ e	D6
 f	D7
 g	D8
 (optional) DP	D9
+
 Verify connections:
+
 Only the GND line uses a resistor.
-No segment line uses a resistor individually.
-Each Arduino pin connects directly to its segment pin.
-Power the Arduino from USB or a 5 V source.
+
+No segment line has an individual resistor.
+
+Each Arduino pin connects directly to its corresponding segment pin.
+
+Power the Arduino using USB or a 5 V external source.
+
 Test Code
+
 int segPins[7] = {2, 3, 4, 5, 6, 7, 8}; // a–g pins
 
 int numbers[10][7] = {
@@ -73,11 +91,19 @@ void loop() {
     delay(1000); // show each number for 1 second
   }
 }
+
 For common-anode displays, invert the logic by replacing:
+
 digitalWrite(segPins[i], numbers[n][i]);
+
 with:
+
 digitalWrite(segPins[i], !numbers[n][i]);
+
 Expected Result
+
 After uploading the sketch:
+
 The display will cycle through digits 0 → 9, showing each for one second.
+
 Brightness may vary slightly between digits because all segments share a single current-limiting resistor.
