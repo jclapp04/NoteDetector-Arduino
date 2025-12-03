@@ -77,3 +77,79 @@ Converts it to a number
 Lights the correct segments on the 7-segment display
 The display updates in real time with your voice or any sound in the room.
 
+🖥️ System Flow
+
+[ Microphone ]
+       ↓
+[ Python (PyAudio) ]
+       ↓
+[ RMS Volume Calculation ]
+       ↓
+[ Map: Volume → Digit (0–9) ]
+       ↓
+[ Serial Output (9600 baud) ]
+       ↓
+[ Arduino Mega ]
+       ↓
+[ 7-Segment LED Display ]
+
+🛠️ Setup Instructions
+
+1. Arduino Setup
+
+Wiring
+
+Connect segments a–g + dp to pins 4–11
+
+Each pin passes through a 220–330Ω resistor
+
+Common cathode → GND
+
+Upload the Arduino code
+
+Make sure this is in your sketch:
+
+Serial.begin(9600);
+
+Test the display:
+
+Open Serial Monitor (9600 baud)
+
+Type 5 → the 7-segment should show 5
+
+2. Python Setup
+
+Install dependencies:
+
+pip install pyaudio numpy pyserial
+
+Run the script:
+
+python NoteDetection.py
+
+Choose your microphone device when prompted.
+
+Make sure your serial port matches your Arduino:
+
+SERIAL_PORT = "/dev/cu.usbmodemXXXX"
+
+📊 Example Terminal Output
+Volume: ██████████.................................  [digit sent: 2]
+Volume: ██████████████████......................... [digit sent: 4]
+
+And on the 7-segment display, you’ll see the digit change dynamically as the volume increases or decreases.
+
+🔥 Future Improvements (Optional)
+
+If you revisit this project later, here are easy upgrades:
+
+Show note names (“A”, “C#”, etc.) on a multi-digit display
+
+Add LEDs as a volume bar graph
+
+Display actual frequency in Hz
+
+Add recording + playback
+
+Build a small enclosure for the display/Arduino
+
