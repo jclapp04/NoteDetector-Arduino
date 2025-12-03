@@ -1,109 +1,47 @@
-# NoteDetector-Arduino
-The purpose of this project is to identify the musical notes played by musical instruments by recording the frequency of the sounds with an Aduino-compatible microphone and transmitting the information to the machine learning model that will be used to classify the notes. It aims to develop a cost effective and simple to assemble note detection system to hobbyists and students.
-## Requirements
+🎶 Real-Time Audio Volume Visualizer (Python + Arduino)
+This project measures live microphone volume in Python and displays the loudness level on a 7-segment Arduino display in real time.
+The Python script analyzes microphone input, calculates the RMS loudness level, converts it to a digit between 0 and 9, and sends that digit over serial to an Arduino.
+The Arduino receives the digit and updates a single-digit 7-segment display accordingly.
+🚀 Features
+Real-time audio input using PyAudio
+Live RMS loudness detection
+Smoothed volume measurement (reduces jitter)
+Volume mapped to digits (0–9)
+Serial communication from Python → Arduino
+Physical visualization on a 7-segment display
+Runs on macOS (and works on Windows/Linux too)
+🧰 Materials Used
+Hardware
+Arduino Mega 2560 (Uno/Nano also work)
+1× Single-digit 7-segment display (common-cathode)
+7× current-limiting resistors (220–330 Ω)
+Breadboard
+Jumper wires
+USB cable
+Microphone
+Built-in laptop mic or external mic
+Software
+Python 3
+Arduino IDE
+Python libraries:
+pyaudio
+numpy
+pyserial
+🔧 How It Works
+1️⃣ Python Reads Microphone Audio
+The script captures small chunks of live audio using PyAudio.
+2️⃣ Volume is Computed
+Each audio chunk is:
+Converted to numeric samples
+RMS loudness is computed
+Loudness is smoothed using a rolling average
+The volume is normalized so it always fits 0–9
+3️⃣ Digit Sent to Arduino (0–9)
+Python sends a single ASCII digit '0'–'9' to the Arduino over serial at 9600 baud.
+4️⃣ Arduino Displays the Volume
+The Arduino:
+Reads the incoming byte
+Converts it to a number
+Lights the correct segments on the 7-segment display
+The display updates in real time with your voice or any sound in the room.
 
-- **Hardware**
-  - Arduino Mega 
-  - Microphone sound sensor module
-  - USB cable for Arduino
-  - Jumper wires and breadboard
-
-- **Software & Accounts**
-  - [Arduino IDE](https://www.arduino.cc/en/software)
-  - Python
-  - [HuggingFace account](https://huggingface.co/) 
-  - GitHub account 
-
-Single-Digit 7-Segment Display Setup (Single-Resistor Version)
-
-Components
-
-1 × Arduino Mega 2560 (or Uno)
-
-1 × Single-digit 7-segment display (common cathode)
-
-1 × 220 Ω – 1 kΩ resistor
-
-Breadboard and jumper wires
-
-Wiring Instructions
-
-Place the 7-segment display in the center of the breadboard so that each side of pins sits on a separate row.
-Identify the display pins. A typical layout (from top left down one side and up the other) is:
-
-a, f, GND, b,
-DP, c, GND, d, e, g
-
-Connect one of the common-cathode pins to Arduino GND through a single resistor (220 Ω – 1 kΩ).
-
-Connect the other common-cathode pin directly to GND.
-
-Connect each segment pin directly to the Arduino pins shown below:
-
-Segment	Arduino Pin
-a	D2
-b	D3
-c	D4
-d	D5
-e	D6
-f	D7
-g	D8
-(optional) DP	D9
-
-Verify connections:
-
-Only the GND line uses a resistor.
-
-No segment line has an individual resistor.
-
-Each Arduino pin connects directly to its corresponding segment pin.
-
-Power the Arduino using USB or a 5 V external source.
-
-Test Code
-
-int segPins[7] = {2, 3, 4, 5, 6, 7, 8}; // a–g pins
-
-int numbers[10][7] = {
-  {1,1,1,1,1,1,0}, // 0
-  {0,1,1,0,0,0,0}, // 1
-  {1,1,0,1,1,0,1}, // 2
-  {1,1,1,1,0,0,1}, // 3
-  {0,1,1,0,0,1,1}, // 4
-  {1,0,1,1,0,1,1}, // 5
-  {1,0,1,1,1,1,1}, // 6
-  {1,1,1,0,0,0,0}, // 7
-  {1,1,1,1,1,1,1}, // 8
-  {1,1,1,1,0,1,1}  // 9
-};
-
-void setup() {
-  for (int i = 0; i < 7; i++) {
-    pinMode(segPins[i], OUTPUT);
-  }
-}
-
-void loop() {
-  for (int n = 0; n < 10; n++) {
-    for (int i = 0; i < 7; i++) {
-      digitalWrite(segPins[i], numbers[n][i]);
-    }
-    delay(1000); // show each number for 1 second
-  }
-}
-
-For common-anode displays, invert the logic by replacing:
-
-digitalWrite(segPins[i], numbers[n][i]);
-
-with:
-
-digitalWrite(segPins[i], !numbers[n][i]);
-
-Expected Result
-
-After uploading the sketch:
-
-The display will cycle through digits 0 → 9, showing each for one second.
-
-Brightness may vary slightly between digits because all segments share a single current-limiting resistor.
