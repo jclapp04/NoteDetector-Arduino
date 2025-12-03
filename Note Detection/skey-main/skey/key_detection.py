@@ -1,278 +1,205 @@
-import glob
-import logging
-import os
-import csv
-from pathlib import Path
-from typing import Any, Dict, Iterator, List, Tuple
-
+import pyaudio
+import wave
 import numpy as np
-import torch
-import torchaudio
-from tqdm import tqdm
+from skey import detect_key
+import tempfile
+import os
+from collections import Counter, deque
+import sys
+import logging
+import math
+import serial
+import time
 
-from .chromanet import ChromaNet
-from .hcqt import VQT, CropCQT
+# --- Suppress logs ---
+logging.getLogger().setLevel(logging.ERROR)
 
-logging.basicConfig(level=logging.INFO)
+# --- Audio settings ---
+CHUNK = 1024
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+RATE = 44100
 
-DEFAULT_CHECKPOINT_PATH = Path(__file__).parent / "models/skey.pt"
+# --- Accuracy settings ---
+BUFFER_SECONDS = 15
+OVERLAP_SECONDS = 10
+MAX_HISTORY = 3
+DEVICE = "cpu"
 
-key_map = {
-    0: "A Major",
-    1: "Bb Major",
-    2: "B Major",
-    3: "C Major",
-    4: "C# Major",
-    5: "D Major",
-    6: "D# Major",
-    7: "E Major",
-    8: "F Major",
-    9: "F# Major",
-    10: "G Major",
-    11: "G# Major",
-    12: "B minor",
-    13: "C minor",
-    14: "C# minor",
-    15: "D minor",
-    16: "D# minor",
-    17: "E minor",
-    18: "F minor",
-    19: "F# minor",
-    20: "G minor",
-    21: "G# minor",
-    22: "A minor",
-    23: "Bb minor",
-}
+# --- Volume visualization settings ---
+SMOOTH_WINDOW = 15      # average last N chunks
+DYNAMIC_SCALE = True    # auto-adjusts to mic input
+MANUAL_SCALE = 2000     # fallback manual sensitivity
+MIN_VALID_SAMPLES = 100 # ignore empty chunks
 
+# --- Initialize PyAudio ---
+p = pyaudio.PyAudio()
+print("\nAvailable audio input devices:")
+for i in range(p.get_device_count()):
+    dev = p.get_device_info_by_index(i)
+    if dev["maxInputChannels"] > 0:
+        print(f"  [{i}] {dev['name']}")
 
-def yield_audio_paths(paths: List[str]) -> Iterator[Dict[str, Any]]:
-    """
-    Yields audio file paths in a randomized order.
+try:
+    device_index = int(input("\nEnter the device index to use: "))
+except ValueError:
+    device_index = None
 
-    Args:
-        paths (List[str]): List of audio file paths.
+recent_predictions = []
+overlap_frames = []
+volume_history = deque(maxlen=SMOOTH_WINDOW)
 
-    Returns:
-        Iterator[Dict[str, Any]]: An iterator that yields dictionaries containing
-        the index and the corresponding audio file path.
-    """
-    for idx in np.random.permutation(len(paths)):
-        yield {"idx": idx, "song_path": paths[idx]}
+stream = p.open(format=FORMAT,
+                channels=CHANNELS,
+                rate=RATE,
+                input=True,
+                input_device_index=device_index,
+                frames_per_buffer=CHUNK)
 
+# -----------------------------
+# SERIAL CONNECTION TO ARDUINO
+# -----------------------------
+# !!! Make sure this matches the port you see in Arduino IDE (Tools -> Port)
+SERIAL_PORT = "/dev/cu.usbmodem1101"   # update if needed
+BAUD = 9600                            # must match Serial.begin(9600) in Arduino
 
-def load_audio(song_path: str, sr: float, mono: bool = True, normalize: bool = True) -> torch.Tensor:
-    """
-    Loads an audio file and returns its waveform as a PyTorch tensor.
+try:
+    ser = serial.Serial(SERIAL_PORT, BAUD, timeout=0)
+    time.sleep(2)  # allow Arduino to reset after opening the port
+    print(f"\nConnected to Arduino on {SERIAL_PORT} at {BAUD} baud")
+except Exception as e:
+    print(f"\nFailed to connect to Arduino: {e}")
+    ser = None
 
-    Args:
-        song_path (str): Path to the audio file.
-        sr (float): Sampling rate for the audio file.
-        mono (bool, optional): Whether to convert the audio to mono. Defaults to True.
-        normalize (bool, optional): Whether to normalize the waveform. Defaults to True.
+print("\nStarting live key detection...")
+print(f"- Buffer: {BUFFER_SECONDS}s")
+print(f"- Overlap: {OVERLAP_SECONDS}s")
+print(f"- Smoothing: last {MAX_HISTORY} predictions")
+print(f"- Device: {DEVICE}")
+print("Press Ctrl+C to stop.\n")
 
-    Returns:
-        torch.Tensor: A tensor containing the audio waveform. If loading fails,
-                      returns a tensor of zeros with shape (1, 1).
-    """
-    if not Path(song_path).exists():
-        raise FileNotFoundError(f"File {song_path} not found.")
+try:
+    while True:
+        frames = []
+        if overlap_frames:
+            frames.extend(overlap_frames)
+
+        if overlap_frames:
+            new_frames_needed = int(RATE / CHUNK * (BUFFER_SECONDS - OVERLAP_SECONDS))
+        else:
+            new_frames_needed = int(RATE / CHUNK * BUFFER_SECONDS)
+
+        print("\nRecording... (live volume updates below)")
+        for _ in range(new_frames_needed):
+            try:
+                data = stream.read(CHUNK, exception_on_overflow=False)
+            except IOError:
+                # Handle stream underrun gracefully
+                continue
+
+            frames.append(data)
+
+            # --- Calculate RMS safely ---
+            audio_data = np.frombuffer(data, dtype=np.int16)
+            if len(audio_data) < MIN_VALID_SAMPLES:
+                rms = 0.0
+            else:
+                rms = math.sqrt(np.mean(audio_data.astype(np.float64) ** 2))
+
+            if math.isnan(rms) or rms < 0:
+                rms = 0.0
+
+            # --- Smoothing ---
+            volume_history.append(rms)
+            avg_rms = np.mean(volume_history)
+            if math.isnan(avg_rms):
+                avg_rms = 0.0
+
+            # --- Dynamic scaling ---
+            if DYNAMIC_SCALE:
+                scale = max(MANUAL_SCALE, np.max(volume_history) * 1.5)
+            else:
+                scale = MANUAL_SCALE
+
+            normalized = min(1.0, avg_rms / scale)
+            bar_len = int(normalized * 50)
+            bar = "█" * bar_len
+            sys.stdout.write(f"\rVolume: {bar:<50} {avg_rms:8.1f}")
+            sys.stdout.flush()
+
+            # --- Send volume level to Arduino as digit 0–9 ---
+            if ser is not None:
+                digit = int(round(normalized * 9))   # 0.0–1.0 -> 0–9
+                digit = max(0, min(9, digit))        # clamp to [0, 9]
+
+                try:
+                    ser.write(str(digit).encode("ascii"))  # send single char '0'–'9'
+                    sys.stdout.write(f"  [digit sent: {digit}]")
+                    sys.stdout.flush()
+                except Exception:
+                    # If serial write fails, do not crash the audio loop
+                    pass
+
+        print("\nRecording complete. Analyzing key...\n")
+
+        # --- keep overlap for smoother detection windows ---
+        overlap_frame_count = int(RATE / CHUNK * OVERLAP_SECONDS)
+        overlap_frames = frames[-overlap_frame_count:]
+
+        # --- Save audio buffer to temp wav file ---
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+            temp_path = temp_file.name
+            wf = wave.open(temp_path, 'wb')
+            wf.setnchannels(CHANNELS)
+            wf.setsampwidth(p.get_sample_size(FORMAT))
+            wf.setframerate(RATE)
+            wf.writeframes(b''.join(frames))
+            wf.close()
+
+        # --- Run key detection on the temp file ---
+        try:
+            result = detect_key(temp_path, extension="wav", device=DEVICE)
+
+            if isinstance(result, list):
+                key_detected = result[0] if result else "Unknown"
+            elif isinstance(result, dict):
+                key_detected = result.get('key', 'Unknown')
+            else:
+                key_detected = str(result)
+
+            recent_predictions.append(key_detected)
+            if len(recent_predictions) > MAX_HISTORY:
+                recent_predictions.pop(0)
+
+            key_counts = Counter(recent_predictions)
+            smoothed_key = key_counts.most_common(1)[0][0]
+            confidence = key_counts.most_common(1)[0][1]
+
+            print(f"Raw detection: {key_detected}")
+            print(f"Smoothed key: {smoothed_key} (confidence: {confidence}/{len(recent_predictions)})")
+            print(f"Recent history: {recent_predictions}")
+            print("-" * 50)
+
+        except Exception as e:
+            print(f"Error during detection: {e}")
+
+        finally:
+            # Always delete temp file
+            os.unlink(temp_path)
+
+except KeyboardInterrupt:
+    print("\n\nStopping live key detection...")
 
     try:
-        waveform, waveform_sr = torchaudio.load(song_path, backend="soundfile")
-    except Exception as e:
-        logging.error(f"Failed to load {song_path}: {e}")
-        raise ValueError(f"Could not load audio file {song_path}: {e}")
+        stream.stop_stream()
+        stream.close()
+    except Exception:
+        pass
 
-    # Resample if necessary
-    if waveform_sr != sr:
-        waveform = torchaudio.transforms.Resample(orig_freq=waveform_sr, new_freq=sr)(waveform)
-
-    # Convert to mono if specified
-    if mono == True and waveform.shape[0] > 1:
-        waveform = torch.mean(waveform, dim=0, keepdim=True)
-
-    if normalize:
-        max_val = torch.max(torch.abs(waveform))
-        if max_val > 0:
-            waveform = waveform / max_val
-
-    # logging.info(f"Waveform shape: {waveform.shape}")
-    return waveform
-
-
-class AudioDataset(torch.utils.data.IterableDataset):
-    """
-    A PyTorch IterableDataset for loading audio files.
-
-    Args:
-        paths (List[str]): List of paths to audio files.
-        sr (int): Sampling rate for loading audio files.
-        device (torch.device): Device to load the audio tensors onto.
-
-    Yields:
-        Tuple[torch.Tensor, str]: A tuple containing the audio tensor and the file path.
-    """
-
-    def __init__(self, paths: List[str], sr: int, device: torch.device):
-        self.paths = paths
-        self.sr = sr
-        self.device = device
-
-    def __iter__(self) -> Iterator[Tuple[torch.Tensor, str]]:
-        for data in yield_audio_paths(self.paths):
-            audio = load_audio(data["song_path"], self.sr).to(self.device)
-            if torch.max(torch.abs(audio)) > 0:
-                yield audio, data["song_path"]
-
-
-def load_model_components(ckpt: Dict[str, Any], device: torch.device) -> Tuple[VQT, ChromaNet, CropCQT]:
-    """
-    Loads model components (VQT, ChromaNet, and CropCQT) and initializes them with checkpoint data.
-
-    Args:
-        ckpt (Dict[str, Any]): Checkpoint dictionary containing model weights.
-        device (torch.device): Device to load the models onto.
-
-    Returns:
-        Tuple[VQT, ChromaNet, CropCQT]: Initialized VQT, ChromaNet, and CropCQT components.
-    """
-    hcqt = VQT(
-        harmonics=[1],
-        fmin=27.5,
-        n_bins=99,
-    ).to(device)
-
-    chromanet = ChromaNet(
-        n_bins=84,
-        n_harmonics=1,
-        out_channels=[2, 3, 40, 40, 30, 10, 3],
-        kernels=[7, 7, 7, 7, 7, 5, 5],
-        temperature=1,
-    ).to(device)
-
-    hcqt.load_state_dict({k.replace("hcqt.", ""): v for k, v in ckpt["stone"].items() if "hcqt" in k})
-
-    chromanet.load_state_dict({k.replace("chromanet.", ""): v for k, v in ckpt["stone"].items() if "chromanet" in k})
-
-    hcqt.eval()
-    chromanet.eval()
-    crop_fn = CropCQT(84)
-    return hcqt, chromanet, crop_fn
-
-
-def infer_key(
-    hcqt: VQT,
-    chromanet: ChromaNet,
-    crop_fn: CropCQT,
-    batch: torch.Tensor,
-    device: torch.device,
-) -> str:
-    """
-    Infers the musical key of an audio batch using the provided model components.
-
-    Args:
-        hcqt (VQT): VQT model component for harmonic constant-Q transform.
-        chromanet (ChromaNet): ChromaNet model component for key prediction.
-        crop_fn (CropCQT): CropCQT function for cropping the CQT output.
-        batch (torch.Tensor): Audio batch tensor.
-        device (torch.device): Device to perform inference on.
-
-    Returns:
-        str: Predicted musical key as a string. Returns "error" if inference fails.
-    """
-    new_batch = batch.unsqueeze(0).to(device)
     try:
-        with torch.no_grad():
-            cropped = crop_fn(hcqt(new_batch), torch.zeros(1).to(device))
-            logits = chromanet(cropped)
-            return key_map[int(torch.mean(logits, dim=0).argmax())]
-    except Exception as e:
-        logging.warning(f"Inference failed (likely short audio): {e}")
-        return "error"
+        p.terminate()
+    except Exception:
+        pass
 
+    print("Done.")
 
-def load_checkpoint(checkpoint_path: str | Path | None = DEFAULT_CHECKPOINT_PATH) -> Dict[str, Any]:
-    """
-    Loads a checkpoint file from the specified checkpoint_path.
-
-    Args:
-        checkpoint_path (str): Path to the checkpoint file.
-
-    Returns:
-        Dict[str, Any]: Loaded checkpoint dictionary.
-    """
-
-    if checkpoint_path is None:
-        checkpoint_path = DEFAULT_CHECKPOINT_PATH
-
-    logging.info(f"Loading checkpoint from {checkpoint_path}")
-    if not os.path.exists(str(checkpoint_path)):
-        raise FileNotFoundError(f"Checkpoint file {checkpoint_path} does not exist.")
-    return torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-
-
-def detect_key(
-    audio_path: str,
-    extension: str = "wav",
-    device: str = "cpu",
-    ckpt_path: str | Path = DEFAULT_CHECKPOINT_PATH,
-    cli: bool = False,
-) -> list[str] | None:
-    """
-    Detects the musical key of audio files using a pre-trained model.
-
-    Args:
-        ckpt_path (str): Path to the model checkpoint file.
-        audio_path (str): Path to the audio file or directory containing audio files.
-        extension (str, optional): File extension of audio files to process. No need to pass this argument when audio_path is a single audio file. Defaults to "wav".
-        device (str, optional): Device to perform inference on ("cpu", "cuda", or "mps"). Defaults to "cpu".
-        cli (bool, optional): If True, prints results to console. If False, returns results. Defaults to False.
-
-    Returns:
-        list[str] | None: List of predicted keys for the audio files. Returns None if no audio files are found.
-    """
-    if device != "cpu" and not torch.cuda.is_available() and not torch.backends.mps.is_available():
-        logging.warning("CUDA and MPS not available. Falling back to CPU.")
-        device = "cpu"
-
-    d = torch.device(device)
-
-    ckpt = load_checkpoint(ckpt_path)
-    sr = ckpt["audio"]["sr"]
-
-    hcqt, chromanet, crop_fn = load_model_components(ckpt, d)
-
-    # Determine if input is a single file or a directory
-    audio_files = (
-        [audio_path]
-        if os.path.isfile(audio_path)
-        else glob.glob(os.path.join(audio_path, f"**/*.{extension}"), recursive=True)
-    )
-
-    if len(audio_files) == 0:
-        raise FileNotFoundError(f"No audio files found in {audio_path}.")
-
-    logging.info(f"\n🔑 Computing key for {len(audio_files)} audio files on {d}...\n")
-
-    results = [
-        infer_key(hcqt, chromanet, crop_fn, load_audio(path, sr).to(d), d)
-        for path in tqdm(audio_files, desc="Processing")
-    ]
-
-    if len(audio_files) == 1:
-        print(f"\n✅ Predicted key for {audio_files[0]}: {results[0]}\n")
-    else:
-        out_dir = os.path.join(audio_path, "prediction")
-        os.makedirs(out_dir, exist_ok=True)
-        out_csv_path = os.path.join(out_dir, "predictions.csv")
-
-        # Save results to a CSV file
-        with open(out_csv_path, mode="w", newline="") as file:
-            writer = csv.writer(file)
-            writer.writerow(["Audio File", "Predicted Key"])
-            for i, key in enumerate(results):
-                writer.writerow([audio_files[i], key])
-        print(f"\n✅ Predictions saved to: {out_csv_path}\n")
-
-    if not cli:
-        return results
