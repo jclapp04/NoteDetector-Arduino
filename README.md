@@ -134,7 +134,9 @@ Make sure your serial port matches your Arduino:
 SERIAL_PORT = "/dev/cu.usbmodemXXXX"
 
 📊 Example Terminal Output
+
 Volume: ██████████.................................  [digit sent: 2]
+
 Volume: ██████████████████......................... [digit sent: 4]
 
 And on the 7-segment display, you’ll see the digit change dynamically as the volume increases or decreases.
