@@ -141,17 +141,5 @@ Volume: ██████████████████..................
 
 And on the 7-segment display, you’ll see the digit change dynamically as the volume increases or decreases.
 
-🔥 Future Improvements (Optional)
 
-If you revisit this project later, here are easy upgrades:
-
-Show note names (“A”, “C#”, etc.) on a multi-digit display
-
-Add LEDs as a volume bar graph
-
-Display actual frequency in Hz
-
-Add recording + playback
-
-Build a small enclosure for the display/Arduino
 
