@@ -141,5 +141,7 @@ Volume: ██████████████████..................
 
 And on the 7-segment display, you’ll see the digit change dynamically as the volume increases or decreases.
 
+https://youtube.com/shorts/wj8dJ39v2QE?feature=share
+
 
 
